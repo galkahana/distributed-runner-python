@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "distributed-runner"
-version = "0.1.0"
+version = "1.0.0"
 description = "A Python library for distributing work across multiple processes"
 authors = []
 packages = [{include = "distributed_runner", from = "src"}]

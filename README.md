@@ -5,13 +5,7 @@ A Python library for distributing work across processes with automatic retry and
 ## Installation
 
 ```bash
-pip install distributed-runner
-```
-
-Or with Poetry:
-
-```bash
-poetry add distributed-runner
+pip install git+https://github.com/galkahana/distributed-runner-python.git@v1.0.0
 ```
 
 ## Use Cases
