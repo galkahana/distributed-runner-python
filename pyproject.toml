@@ -1,0 +1,43 @@
+[tool.poetry]
+name = "distributed-runner"
+version = "0.1.0"
+description = "A Python library for distributing work across multiple processes"
+authors = []
+packages = [{include = "distributed_runner", from = "src"}]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+tenacity = "^8.0"
+
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.4"
+mypy = "^1.10"
+pytest = "^8.0"
+pytest-asyncio = "^0.23"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/distributed_runner/_types.py" = ["E741"]
+
+[tool.mypy]
+strict = true
+python_version = "3.10"
+mypy_path = "src"
+packages = ["distributed_runner"]
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
