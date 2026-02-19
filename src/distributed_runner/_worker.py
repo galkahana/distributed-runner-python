@@ -3,21 +3,16 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from tenacity import retry, stop_after_attempt, wait_exponential
-
 
 def execute_with_retry(fn: Callable[..., Any], item: Any, max_retries: int) -> Any:
-    """Execute fn(item) with tenacity-based retry. Runs inside the worker process."""
-
-    @retry(
-        stop=stop_after_attempt(max_retries + 1),
-        wait=wait_exponential(multiplier=0.1, max=2),
-        reraise=True,
-    )
-    def _call() -> Any:
-        return fn(item)
-
-    return _call()
+    """Execute fn(item) with simple retry. Runs inside the worker process."""
+    last_exc: Exception | None = None
+    for _ in range(max_retries + 1):
+        try:
+            return fn(item)
+        except Exception as exc:
+            last_exc = exc
+    raise last_exc  # type: ignore[misc]
 
 
 def _worker_fn(fn: Callable[..., Any], item: Any, max_retries: int) -> Any:

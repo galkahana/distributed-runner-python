@@ -19,7 +19,7 @@ class TestAsyncMapReduce:
         )
         assert result == sum(range(1, 101))
 
-    async def test_list_result(self) -> None:
+    async def test_no_accumulator(self) -> None:
         data = list(range(1, 11))
         result = await async_map_reduce(
             data,
@@ -27,7 +27,7 @@ class TestAsyncMapReduce:
             process_fn=partition_sum,
             num_workers=2,
         )
-        assert sorted(result) == sorted([sum(range(1, 6)), sum(range(6, 11))])
+        assert result is None
 
     async def test_partition_failure(self) -> None:
         with pytest.raises(TaskFailedError):

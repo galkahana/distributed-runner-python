@@ -5,31 +5,34 @@ from collections.abc import Callable, Sequence
 from concurrent.futures import Future, ProcessPoolExecutor, as_completed
 from typing import Any, overload
 
-from distributed_runner._errors import TaskFailedError
+from distributed_runner._runner_state import RunnerState
 from distributed_runner._stats import Stats
+from distributed_runner._types import A, I, O
 from distributed_runner._worker import _worker_fn
 
 
 @overload
 def process(
-    items: Sequence[Any],
-    process_fn: Callable[..., Any],
+    items: Sequence[I],
+    process_fn: Callable[[I], O],
     *,
     num_workers: int | None = ...,
     max_retries: int = ...,
-    accumulator_fn: Callable[..., Any],
-    initial_value: Any,
-) -> Any: ...
+    accumulator_fn: Callable[[A, O], A],
+    initial_value: A,
+    on_progress: Callable[[Stats], None] | None = ...,
+) -> A: ...
 
 
 @overload
 def process(
-    items: Sequence[Any],
-    process_fn: Callable[..., Any],
+    items: Sequence[I],
+    process_fn: Callable[[I], O],
     *,
     num_workers: int | None = ...,
     max_retries: int = ...,
-) -> list[Any]: ...
+    on_progress: Callable[[Stats], None] | None = ...,
+) -> None: ...
 
 
 def process(
@@ -40,58 +43,65 @@ def process(
     max_retries: int = 0,
     accumulator_fn: Callable[..., Any] | None = None,
     initial_value: Any = None,
+    on_progress: Callable[[Stats], None] | None = None,
 ) -> Any:
-    """Process a list of items in parallel using multiple processes.
+    """Process a list of items in parallel using multiple worker processes.
 
-    If accumulator_fn is provided, results are folded using accumulator_fn(acc, result).
-    Otherwise, returns a list of results (order not guaranteed).
+    Each item is passed to process_fn in a separate process. On first failure,
+    remaining tasks are cancelled and a TaskFailedError is raised.
+
+    Args:
+        items: The items to process. Must be picklable for cross-process transfer.
+        process_fn: Function applied to each item. Must be a top-level or static
+            function (picklable). Receives one item, returns a result.
+        num_workers: Max parallel processes. Defaults to os.cpu_count().
+        max_retries: Times to retry a failed task with simple retry. Defaults to 0.
+        accumulator_fn: If provided, results are folded via accumulator_fn(acc, result).
+            Without it, results are discarded and None is returned.
+        initial_value: Starting value for the accumulator. Required when accumulator_fn
+            is provided.
+        on_progress: Optional callback invoked after each task completes (or fails)
+            with current Stats. Useful for logging or progress bars.
+
+    Returns:
+        The final accumulated value, or None if no accumulator_fn was given.
+
+    Raises:
+        TaskFailedError: On first task failure (after retries exhausted), with
+            stats on submitted/completed/failed counts.
     """
-    if not items:
-        if accumulator_fn is not None:
-            return initial_value
-        return []
-
     workers = num_workers if num_workers is not None else os.cpu_count() or 1
-    submitted = 0
-    completed = 0
-    failed = 0
-
-    use_accumulator = accumulator_fn is not None
-    accumulator = initial_value
-    results: list[Any] = []
 
     with ProcessPoolExecutor(max_workers=workers) as executor:
-        future_to_index: dict[Future[Any], int] = {}
-        for i, item in enumerate(items):
-            future = executor.submit(_worker_fn, process_fn, item, max_retries)
-            future_to_index[future] = i
-            submitted += 1
+        futures = _submit_tasks(executor, items, process_fn, max_retries)
+        state = _collect_results(futures, accumulator_fn, initial_value, on_progress)
 
-        try:
-            for future in as_completed(future_to_index):
-                try:
-                    result = future.result()
-                except Exception as exc:
-                    failed += 1
-                    stats = Stats(submitted=submitted, completed=completed, failed=failed)
-                    # Cancel remaining futures
-                    for f in future_to_index:
-                        f.cancel()
-                    raise TaskFailedError(
-                        f"Task failed: {exc}",
-                        original_exception=exc,
-                        stats=stats,
-                    ) from exc
+    return state.accumulator
 
-                completed += 1
-                if use_accumulator:
-                    assert accumulator_fn is not None
-                    accumulator = accumulator_fn(accumulator, result)
-                else:
-                    results.append(result)
-        except TaskFailedError:
-            raise
 
-    if use_accumulator:
-        return accumulator
-    return results
+def _submit_tasks(
+    executor: ProcessPoolExecutor,
+    items: Sequence[Any],
+    process_fn: Callable[..., Any],
+    max_retries: int,
+) -> list[Future[Any]]:
+    return [executor.submit(_worker_fn, process_fn, item, max_retries) for item in items]
+
+
+def _collect_results(
+    futures: list[Future[Any]],
+    accumulator_fn: Callable[..., Any] | None,
+    initial_value: Any,
+    on_progress: Callable[[Stats], None] | None,
+) -> RunnerState:
+    state = RunnerState(submitted=len(futures), accumulator=initial_value)
+
+    for future in as_completed(futures):
+        result = state.get_result_or_fail(future, futures)
+        state.completed += 1
+        if accumulator_fn is not None:
+            state.accumulator = accumulator_fn(state.accumulator, result)
+        if on_progress is not None:
+            on_progress(state.to_stats())
+
+    return state

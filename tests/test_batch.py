@@ -7,9 +7,9 @@ from tests.helpers import double, fail_always, fail_once_then_succeed, slow_doub
 
 
 class TestProcess:
-    def test_basic_list_result(self) -> None:
+    def test_basic_no_accumulator(self) -> None:
         result = process([1, 2, 3, 4], double, num_workers=2)
-        assert sorted(result) == [2, 4, 6, 8]
+        assert result is None
 
     def test_with_accumulator(self) -> None:
         result = process(
@@ -21,9 +21,9 @@ class TestProcess:
         )
         assert result == 20  # 2+4+6+8
 
-    def test_empty_list_returns_empty(self) -> None:
+    def test_empty_list_no_accumulator(self) -> None:
         result = process([], double, num_workers=2)
-        assert result == []
+        assert result is None
 
     def test_empty_list_with_accumulator(self) -> None:
         result = process(
@@ -36,7 +36,13 @@ class TestProcess:
         assert result == 42
 
     def test_single_item(self) -> None:
-        result = process([5], square, num_workers=1)
+        result = process(
+            [5],
+            square,
+            num_workers=1,
+            accumulator_fn=lambda acc, x: acc + [x],
+            initial_value=[],
+        )
         assert result == [25]
 
     def test_fail_fast(self) -> None:
@@ -46,7 +52,14 @@ class TestProcess:
         assert isinstance(exc_info.value.original_exception, ValueError)
 
     def test_retry_succeeds(self) -> None:
-        result = process([100], fail_once_then_succeed, num_workers=1, max_retries=2)
+        result = process(
+            [100],
+            fail_once_then_succeed,
+            num_workers=1,
+            max_retries=2,
+            accumulator_fn=lambda acc, x: acc + [x],
+            initial_value=[],
+        )
         assert result == [200]
 
     def test_retry_exhausted(self) -> None:
@@ -54,7 +67,13 @@ class TestProcess:
             process([1], fail_always, num_workers=1, max_retries=2)
 
     def test_num_workers(self) -> None:
-        result = process([1, 2, 3, 4, 5], slow_double, num_workers=4)
+        result = process(
+            [1, 2, 3, 4, 5],
+            slow_double,
+            num_workers=4,
+            accumulator_fn=lambda acc, x: acc + [x],
+            initial_value=[],
+        )
         assert sorted(result) == [2, 4, 6, 8, 10]
 
     def test_accumulator_collect_to_set(self) -> None:

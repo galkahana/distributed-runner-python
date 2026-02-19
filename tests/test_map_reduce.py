@@ -19,7 +19,7 @@ class TestMapReduce:
         )
         assert result == sum(range(1, 101))
 
-    def test_list_result(self) -> None:
+    def test_no_accumulator(self) -> None:
         data = list(range(1, 11))
         result = map_reduce(
             data,
@@ -27,7 +27,7 @@ class TestMapReduce:
             process_fn=partition_sum,
             num_workers=2,
         )
-        assert sorted(result) == sorted([sum(range(1, 6)), sum(range(6, 11))])
+        assert result is None
 
     def test_single_partition(self) -> None:
         data = [10, 20, 30]
