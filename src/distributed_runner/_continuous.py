@@ -108,9 +108,31 @@ def _process_loop(
             result = state.get_result_or_fail(future, pending)
 
             state.completed += 1
-            accepting_new = state.accumulate_and_commit(
-                result, accumulator_fn, submit_fn, buffered, pending, accepting_new
+            accepting_new = _accumulate_and_commit(
+                result, accumulator_fn, submit_fn, buffered, pending, state, accepting_new
             )
 
             if on_progress is not None:
                 on_progress(state.to_stats())
+
+
+def _accumulate_and_commit(
+    result: Any,
+    accumulator_fn: Callable[..., Any],
+    submit_fn: Callable[..., None],
+    buffered: list[Future[Any]],
+    pending: set[Future[Any]],
+    state: RunnerState,
+    accepting_new: bool,
+) -> bool:
+    buffered.clear()
+    state.accumulator, should_continue = accumulator_fn(state.accumulator, result, submit_fn)
+    if should_continue:
+        pending.update(buffered)
+    else:
+        for f in buffered:
+            f.cancel()
+            state.submitted -= 1
+        accepting_new = False
+    buffered.clear()
+    return accepting_new
