@@ -15,6 +15,6 @@ def execute_with_retry(fn: Callable[..., Any], item: Any, max_retries: int) -> A
     raise last_exc  # type: ignore[misc]
 
 
-def _worker_fn(fn: Callable[..., Any], item: Any, max_retries: int) -> Any:
+def worker_fn(fn: Callable[..., Any], item: Any, max_retries: int) -> Any:
     """Top-level picklable function that runs in worker processes."""
     return execute_with_retry(fn, item, max_retries)
