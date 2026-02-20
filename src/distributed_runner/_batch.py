@@ -8,7 +8,7 @@ from typing import Any, overload
 from distributed_runner._runner_state import RunnerState
 from distributed_runner._stats import Stats
 from distributed_runner._types import A, I, O
-from distributed_runner._worker import _worker_fn
+from distributed_runner._worker import worker_fn
 
 
 @overload
@@ -85,7 +85,7 @@ def _submit_tasks(
     process_fn: Callable[..., Any],
     max_retries: int,
 ) -> list[Future[Any]]:
-    return [executor.submit(_worker_fn, process_fn, item, max_retries) for item in items]
+    return [executor.submit(worker_fn, process_fn, item, max_retries) for item in items]
 
 
 def _collect_results(

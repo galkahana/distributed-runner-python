@@ -8,7 +8,7 @@ from typing import Any, cast
 from distributed_runner._runner_state import RunnerState
 from distributed_runner._stats import Stats
 from distributed_runner._types import A, I, O
-from distributed_runner._worker import _worker_fn
+from distributed_runner._worker import worker_fn
 
 
 def process_continuous(
@@ -77,7 +77,7 @@ def _submit_initial(
 ) -> set[Future[Any]]:
     pending: set[Future[Any]] = set()
     for task in initial_tasks:
-        future = executor.submit(_worker_fn, process_fn, task, max_retries)
+        future = executor.submit(worker_fn, process_fn, task, max_retries)
         pending.add(future)
         state.submitted += 1
     return pending
@@ -97,7 +97,7 @@ def _process_loop(
 
     def submit_fn(item: Any) -> None:
         if accepting_new:
-            future = executor.submit(_worker_fn, process_fn, item, max_retries)
+            future = executor.submit(worker_fn, process_fn, item, max_retries)
             buffered.append(future)
             state.submitted += 1
 
