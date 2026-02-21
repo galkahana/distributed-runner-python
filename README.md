@@ -10,27 +10,32 @@ pip install git+https://github.com/galkahana/distributed-runner-python.git@v1.0.
 
 ## Use Cases
 
-- [**Batch Processing with Accumulation**](#1-batch-processing-with-accumulation) — Process a list of items in parallel, accumulate results into a single value
+- [**Batch Processing**](#1-batch-processing) — Process a list of items in parallel, optionally accumulate results
 - [**Partitioned Parallel Processing**](#2-partitioned-parallel-processing) — Split data into partitions, process each in parallel
 - [**Continuous Feed Processing**](#3-continuous-feed-processing) — Accumulator-driven workflow that can submit new tasks and control shutdown
 
-### 1. Batch Processing with Accumulation
+### 1. Batch Processing
 
-Use `process()` to process a list of items in parallel and accumulate results into a single value. Without an accumulator, returns a list of results.
+Use `process()` to process a list of items in parallel. Without an accumulator, results are discarded and `None` is returned — useful for fire-and-forget or side-effect workloads:
 
 ```python
 from distributed_runner import process
 
-# Simple parallel processing — returns a list of results
-results = process([1, 2, 3, 4, 5], lambda x: x * 2, num_workers=4)
-# results = [2, 4, 6, 8, 10]  (order not guaranteed)
+def double(x: int) -> int:
+    return x * 2
+
+# Without accumulator — results are discarded, returns None
+process([1, 2, 3, 4, 5], double, num_workers=4)
 ```
 
+> **Note:** Task functions must be top-level or static — they are sent to worker processes via pickling. Lambdas and closures are not picklable and will fail at runtime.
+
+With an accumulator, results are folded into a single value:
+
 ```python
-# With accumulation — fold results into a single value
 total = process(
     [1, 2, 3, 4, 5],
-    lambda x: x * 2,
+    double,
     num_workers=4,
     accumulator_fn=lambda acc, x: acc + x,
     initial_value=0,
@@ -38,62 +43,105 @@ total = process(
 # total = 30
 ```
 
-Async version:
+Use `on_progress` to track progress as tasks complete. The callback receives a `Stats` snapshot after each task:
 
 ```python
-from distributed_runner import async_process
+from distributed_runner import Stats
 
-total = await async_process(
+def report(stats: Stats) -> None:
+    print(f"{stats.completed}/{stats.submitted} complete, {stats.failed} failed")
+
+total = process(
     [1, 2, 3, 4, 5],
-    lambda x: x * 2,
+    double,
     num_workers=4,
     accumulator_fn=lambda acc, x: acc + x,
     initial_value=0,
+    on_progress=report,
 )
 ```
 
 ### 2. Partitioned Parallel Processing
 
-Use `map_reduce()` to split work into partitions processed by a process pool. Each partition receives its index and total count, allowing it to select its slice of data independently.
+Use `map_reduce()` to split work into partitions processed by a process pool. Each partition receives its index, total count, and shared data — enough to independently determine what slice of work to do.
 
-This example reads database rows using range-based partitioning and writes each row to a file:
+**Example: export rows from a database to Kafka**
+
+Each partition receives the full date range and computes its own sub-range, fetches from the database, and publishes to Kafka. No accumulation needed — returns `None`.
 
 ```python
+from datetime import date, timedelta
 from distributed_runner import map_reduce, PartitionTask
 
-def process_partition(task: PartitionTask[list[int]]) -> int:
-    """Sum elements in this partition's slice of the shared data."""
-    data = task.shared_data
-    chunk_size = len(data) // task.total_partitions
-    start = task.partition_index * chunk_size
-    end = len(data) if task.partition_index == task.total_partitions - 1 else start + chunk_size
-    return sum(data[start:end])
+def export_partition(task: PartitionTask[tuple[date, date]]) -> None:
+    lookback_date, end_date = task.shared_data
+    total_days = (end_date - lookback_date).days
+    days_per_partition = total_days // task.total_partitions
 
-data = list(range(1, 10_001))
-total = map_reduce(
-    data,
+    start = lookback_date + timedelta(days=task.partition_index * days_per_partition)
+    end = (
+        end_date
+        if task.partition_index == task.total_partitions - 1
+        else start + timedelta(days=days_per_partition)
+    )
+
+    rows = db.fetch_by_date_range(start, end)  # your DB call
+    for row in rows:
+        kafka.publish("export-topic", row)  # your Kafka publish
+
+map_reduce(
+    (date(2023, 1, 1), date(2024, 1, 1)),   # (lookback_date, end_date), shared across all partitions
     num_partitions=8,
-    process_fn=process_partition,
+    process_fn=export_partition,
     num_workers=4,
-    accumulator_fn=lambda acc, x: acc + x,
-    initial_value=0,
-)
-# total = 50_005_000
+)  # returns None
 ```
 
-Async version:
+**Example: compute statistics over transaction amounts**
+
+Each partition processes its slice and returns partial stats. The accumulator merges them into a final result.
 
 ```python
-from distributed_runner import async_map_reduce
+from dataclasses import dataclass
 
-total = await async_map_reduce(
-    data,
+@dataclass
+class PartitionStats:
+    total: float
+    count: int
+    minimum: float
+    maximum: float
+
+def compute_stats(task: PartitionTask[list[float]]) -> PartitionStats:
+    amounts = task.shared_data
+    chunk_size = len(amounts) // task.total_partitions
+    start = task.partition_index * chunk_size
+    end = len(amounts) if task.partition_index == task.total_partitions - 1 else start + chunk_size
+
+    chunk = amounts[start:end]
+    return PartitionStats(
+        total=sum(chunk),
+        count=len(chunk),
+        minimum=min(chunk),
+        maximum=max(chunk),
+    )
+
+def merge_stats(acc: PartitionStats, stats: PartitionStats) -> PartitionStats:
+    return PartitionStats(
+        total=acc.total + stats.total,
+        count=acc.count + stats.count,
+        minimum=min(acc.minimum, stats.minimum),
+        maximum=max(acc.maximum, stats.maximum),
+    )
+
+result = map_reduce(
+    transaction_amounts,    # list[float], shared across all partitions
     num_partitions=8,
-    process_fn=process_partition,
+    process_fn=compute_stats,
     num_workers=4,
-    accumulator_fn=lambda acc, x: acc + x,
-    initial_value=0,
+    accumulator_fn=merge_stats,
+    initial_value=PartitionStats(total=0, count=0, minimum=float("inf"), maximum=float("-inf")),
 )
+average = result.total / result.count
 ```
 
 ### 3. Continuous Feed Processing
@@ -129,26 +177,12 @@ result = process_continuous(
 )
 ```
 
-Async version:
-
-```python
-from distributed_runner import async_process_continuous
-
-result = await async_process_continuous(
-    ["https://example.com"],
-    crawl,
-    accumulate,
-    initial_value={"visited": set(), "pages": {}},
-    num_workers=8,
-)
-```
-
 ## Features
 
 - **Fail-fast error handling** — On first failure, remaining tasks are cancelled and `TaskFailedError` is raised with stats
-- **Automatic retry** — Tenacity-based retry with exponential backoff, runs inside worker processes (no IPC overhead)
-- **Stats tracking** — `TaskFailedError.stats` reports submitted, completed, and failed counts
-- **Both sync and async** — Every function has an `async_` counterpart
+- **Automatic retry** — Simple retry with no external dependencies, runs inside worker processes (no IPC overhead)
+- **Progress callbacks** — `on_progress` callback invoked after each task completes with current `Stats`, useful for progress bars and logging
+- **Stats tracking** — `TaskFailedError.stats` and `on_progress` both report submitted, completed, and failed counts
 
 ## Development
 
