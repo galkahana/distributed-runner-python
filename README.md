@@ -21,11 +21,11 @@ Use `process()` to process a list of items in parallel. Without an accumulator, 
 ```python
 from distributed_runner import process
 
-def double(x: int) -> int:
-    return x * 2
+def log(x: int) -> None:
+    # or a more sophisticated side effect...like write to db/kafka
+    print(x)
 
-# Without accumulator — results are discarded, returns None
-process([1, 2, 3, 4, 5], double, num_workers=4)
+process([1, 2, 3, 4, 5], log, num_workers=4)
 ```
 
 > **Note:** Task functions must be top-level or static — they are sent to worker processes via pickling. Lambdas and closures are not picklable and will fail at runtime.
