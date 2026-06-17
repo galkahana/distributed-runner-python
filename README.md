@@ -28,8 +28,6 @@ def log(x: int) -> None:
 process([1, 2, 3, 4, 5], log, num_workers=4)
 ```
 
-> **Note:** Task functions must be top-level or static — they are sent to worker processes via pickling. Lambdas and closures are not picklable and will fail at runtime.
-
 With an accumulator, results are folded into a single value:
 
 ```python
